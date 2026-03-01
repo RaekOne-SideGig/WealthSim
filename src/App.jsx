@@ -600,13 +600,25 @@ export default function App() {
         .chk{width:14px;height:14px;cursor:pointer;accentColor:#3b82f6;}
         @media(max-width:900px){.main-grid{grid-template-columns:1fr!important;} .stats-grid{grid-template-columns:1fr 1fr!important;}}
         @media(max-width:540px){.stats-grid{grid-template-columns:1fr!important;}}
+        .tab-bar{display:none;}
+        .desktop-tabs{display:flex;}
+        @media(max-width:768px){
+          .tab-bar{display:flex;position:fixed;bottom:0;left:0;right:0;background:#0a0c14;border-top:1px solid #1e2130;z-index:100;height:60px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
+          .tab-bar::-webkit-scrollbar{display:none;}
+          .tab-bar-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:64px;flex:1;gap:3px;border:none;background:transparent;cursor:pointer;padding:6px 4px;transition:all .15s;}
+          .tab-bar-btn .tbi{font-size:18px;line-height:1;}
+          .tab-bar-btn .tbl{font-size:9px;font-weight:600;text-transform:capitalize;font-family:inherit;letter-spacing:.02em;}
+          .desktop-tabs{display:none;}
+          .mobile-content{padding-bottom:68px!important;}
+          .header-save{font-size:11px!important;padding:5px 10px!important;}
+        }
       `}</style>
 
       {/* ── Header ── */}
       <div style={{background:"#0a0c14",borderBottom:"1px solid #1e2130",padding:"0 16px",display:"flex",alignItems:"center",justifyContent:"space-between",height:52,flexShrink:0,gap:10}}>
         <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0,overflow:"hidden"}}>
           <h1 style={{fontSize:20,fontWeight:800,letterSpacing:"-0.03em",background:"linear-gradient(90deg,#60a5fa,#a78bfa)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",flexShrink:0}}>WealthSim</h1>
-          <div style={{display:"flex",gap:2,background:"#0f1117",border:"1px solid #1e2130",borderRadius:8,padding:3,overflowX:"auto"}}>
+          <div className="desktop-tabs" style={{display:"flex",gap:2,background:"#0f1117",border:"1px solid #1e2130",borderRadius:8,padding:3,overflowX:"auto"}}>
             {TABS.map(t=><button key={t} style={tb(t)} onClick={()=>setActiveTab(t)}>{t.charAt(0).toUpperCase()+t.slice(1)}</button>)}
           </div>
         </div>
@@ -740,6 +752,20 @@ export default function App() {
         <div style={{marginTop:16,textAlign:"center",color:"#1a1d27",fontSize:11}}>
           For illustrative purposes only — not financial advice. Tax estimates based on 2024 federal brackets (single filer). SS benefit adjustments per SSA rules. State taxes not included.
         </div>
+      </div>
+      {/* ── Mobile bottom tab bar ── */}
+      <div className="tab-bar">
+        {TABS.map(t=>{
+          const icons = {"portfolio": "📊", "accounts": "🏦", "earnings": "💵", "expenses": "📌", "rental": "🏘️", "home": "🏠", "projections": "📈", "retirement": "🎯", "planning": "🗺️", "recommendations": "💡", "scenarios": "🔀"};
+          const active = activeTab===t;
+          return (
+            <button key={t} className="tab-bar-btn" onClick={()=>setActiveTab(t)}
+              style={{color:active?"#60a5fa":"#475569"}}>
+              <span className="tbi">{icons[t]||"●"}</span>
+              <span className="tbl">{t}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
     </>
