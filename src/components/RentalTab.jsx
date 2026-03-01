@@ -72,9 +72,9 @@ export default function RentalTab({accounts, currentAge, retirementAge, lifeExpe
                 mortBal = Math.max(0, mortBal - principal);
               }
               const equity = Math.max(0, propVal - mortBal);
-              // Cash pot: net cashflow (after expenses, after mortgage) invested at cashInvRate
-              // FV of annuity for positive cashflow years
-              const saveable = Math.max(0, netAfterMortgage);
+              // Cash pot: net cashflow reinvested at cashInvRate
+              // If cashflow is redirected to earnings (includeInEarnings), it's spent — cashPot = 0
+              const saveable = acc.includeInEarnings ? 0 : Math.max(0, netAfterMortgage);
               const cashPot = cashRate>0
                 ? saveable * (Math.pow(1+cashRate,yr)-1)/cashRate
                 : saveable * yr;
@@ -164,6 +164,36 @@ export default function RentalTab({accounts, currentAge, retirementAge, lifeExpe
 
                   return (
                     <>
+                    {/* Net cashflow to earnings toggle */}
+                    <div className="card" style={{border:`1px solid ${prop.includeInEarnings?"#22c55e":"#1e2130"}`,background:prop.includeInEarnings?"#071210":"#0f1117"}}>
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+                        <div>
+                          <div style={{fontSize:13,fontWeight:700,color:prop.includeInEarnings?"#4ade80":"#64748b",marginBottom:4}}>
+                            💵 Include Net Cashflow in Earnings
+                          </div>
+                          <div style={{fontSize:11,color:"#475569",lineHeight:1.5}}>
+                            Adds this property's net monthly cashflow ({fmt(netMo)}/mo) to your household income on the Earnings tab, increasing your disposable income and max saveable amount.
+                          </div>
+                        </div>
+                        <button
+                          onClick={()=>updAcc(prop.id,"includeInEarnings",!prop.includeInEarnings)}
+                          style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",background:"none",border:"none",padding:0,flexShrink:0}}>
+                          <div style={{position:"relative",width:44,height:24,flexShrink:0}}>
+                            <div style={{position:"absolute",inset:0,borderRadius:12,background:prop.includeInEarnings?"#16a34a":"#1e2130",transition:"background .2s"}}/>
+                            <div style={{position:"absolute",top:3,left:prop.includeInEarnings?22:3,width:18,height:18,borderRadius:"50%",background:"white",transition:"left .2s"}}/>
+                          </div>
+                          <span style={{fontSize:12,color:prop.includeInEarnings?"#4ade80":"#475569",fontWeight:600}}>
+                            {prop.includeInEarnings?"Active":"Off"}
+                          </span>
+                        </button>
+                      </div>
+                      {prop.includeInEarnings && netMo < 0 && (
+                        <div style={{marginTop:10,fontSize:11,color:"#f87171",background:"#1c0a0a",border:"1px solid #3f1a1a",borderRadius:6,padding:"6px 10px"}}>
+                          ⚠️ This property currently has negative cashflow ({fmt(netMo)}/mo). Including it will reduce your household income.
+                        </div>
+                      )}
+                    </div>
+
                     {/* Property inputs */}
                     <div className="card">
                       <div style={{fontSize:13,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:".06em",marginBottom:14}}>
@@ -271,13 +301,119 @@ export default function RentalTab({accounts, currentAge, retirementAge, lifeExpe
                         </div>
                       )}
                       {saleAge&&!saleRow&&<div style={{color:"#f87171",fontSize:12}}>Sale age {saleAge} is outside projection range.</div>}
-                      {saleAge&&deployAcc&&(
-                        <div style={{fontSize:11,color:"#475569",lineHeight:1.7,background:"#0f0820",borderRadius:8,padding:"10px 12px"}}>
-                          📊 If you sell at age {saleAge} for {fmtK(saleProceeds)} net equity and deploy to <strong style={{color:"#60a5fa"}}>{deployAcc.name}</strong> at {deployAcc.annualReturn}%:<br/>
-                          → By age {lifeExpectancy}: <strong style={{color:"#4ade80"}}>{fmtK(deployedFV)}</strong> in that account<br/>
-                          {retirementAge>=saleAge&&<>→ By retirement age {retirementAge}: <strong style={{color:"#f59e0b"}}>{fmtK(deployedFVAtRetire)}</strong></>}
-                        </div>
-                      )}
+                      {saleAge&&saleRow&&(()=>{
+                        // ── Sell vs Hold analysis ──────────────────────────────
+                        const COST_PCT       = 0.25; // capital gains + closing costs
+                        const netAfterCosts  = saleProceeds * (1 - COST_PCT);
+                        const annualCashflow = netMo * 12;
+                        // Years of equivalent cashflow the net proceeds would fund
+                        const yearsOfCashflow = annualCashflow > 0
+                          ? netAfterCosts / annualCashflow
+                          : null;
+                        // Deployed FV at lifeExpectancy (already computed above)
+                        // Hold: cashflow pot grown to lifeExpectancy
+                        const holdYrs      = lifeExpectancy - saleAge;
+                        const cashRate     = s.cashInvRate / 100;
+                        const annSaveable  = Math.max(0, netMo) * 12;
+                        const holdCashPotFV = cashRate > 0
+                          ? annSaveable * (Math.pow(1+cashRate, holdYrs) - 1) / cashRate
+                          : annSaveable * holdYrs;
+                        // Equity still growing if held
+                        const holdEquityFV = saleRow.propVal * Math.pow(1 + s.equityGrowth/100, holdYrs);
+                        const holdTotalFV  = holdCashPotFV + holdEquityFV;
+                        // Sell: deployed proceeds FV
+                        const sellFV = deployAcc ? deployedFV : netAfterCosts;
+                        const sellWins = deployAcc ? sellFV > holdTotalFV : null;
+                        const recommendation = !deployAcc
+                          ? null
+                          : sellWins
+                            ? "sell"
+                            : "hold";
+
+                        return (
+                          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                            {/* Sell vs Hold stat cards */}
+                            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                              {/* SELL */}
+                              <div style={{background:"#0d0820",border:`2px solid ${recommendation==="sell"?"#a855f7":"#2a1f3f"}`,borderRadius:10,padding:"12px 14px"}}>
+                                <div style={{fontSize:11,fontWeight:700,color:"#c084fc",textTransform:"uppercase",letterSpacing:".06em",marginBottom:10}}>
+                                  🏷️ Sell at Age {saleAge}
+                                  {recommendation==="sell"&&<span style={{marginLeft:8,background:"#4c1d95",color:"#e9d5ff",fontSize:9,padding:"2px 6px",borderRadius:4}}>RECOMMENDED</span>}
+                                </div>
+                                {[
+                                  {l:"Gross Proceeds",       v:fmt(saleProceeds)},
+                                  {l:"Costs (25% cap gains + closing)", v:`-${fmt(saleProceeds*COST_PCT)}`},
+                                  {l:"Net After Costs",      v:fmt(netAfterCosts), bold:true, c:"#e2e8f0"},
+                                  ...(annualCashflow>0?[{l:"Equivalent cashflow funded", v:`${yearsOfCashflow?.toFixed(1)} yrs`}]:[]),
+                                  ...(deployAcc?[
+                                    {l:`Deployed to ${deployAcc.name}`,v:fmt(netAfterCosts)},
+                                    {l:`Value at Age ${lifeExpectancy}`,v:fmtK(sellFV), bold:true, c:"#a855f7"},
+                                  ]:[{l:"Select an account above","v":"to model growth"}]),
+                                ].map(r=>(
+                                  <div key={r.l} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid #1e1030",fontSize:11}}>
+                                    <span style={{color:"#64748b"}}>{r.l}</span>
+                                    <span style={{color:r.c||(r.v?.toString().startsWith("-")?"#f87171":"#e2e8f0"),fontWeight:r.bold?700:500,fontFamily:"'DM Mono',monospace"}}>{r.v}</span>
+                                  </div>
+                                ))}
+                              </div>
+
+                              {/* HOLD */}
+                              <div style={{background:"#080e18",border:`2px solid ${recommendation==="hold"?"#22c55e":"#1e2130"}`,borderRadius:10,padding:"12px 14px"}}>
+                                <div style={{fontSize:11,fontWeight:700,color:"#4ade80",textTransform:"uppercase",letterSpacing:".06em",marginBottom:10}}>
+                                  🏠 Hold from Age {saleAge}
+                                  {recommendation==="hold"&&<span style={{marginLeft:8,background:"#052e16",color:"#86efac",fontSize:9,padding:"2px 6px",borderRadius:4}}>RECOMMENDED</span>}
+                                </div>
+                                {[
+                                  {l:"Monthly Net Cashflow",       v:fmt(netMo)},
+                                  {l:"Annual Cashflow",            v:fmt(netMo*12)},
+                                  {l:`Cashflow invested at ${s.cashInvRate}%`, v:""},
+                                  {l:`Cashflow pot at age ${lifeExpectancy}`,  v:fmtK(holdCashPotFV), c:"#4ade80"},
+                                  {l:`Equity value at age ${lifeExpectancy}`,  v:fmtK(holdEquityFV),  c:"#60a5fa"},
+                                  {l:"Total (equity + cashflow)",  v:fmtK(holdTotalFV), bold:true, c:"#4ade80"},
+                                ].map(r=>(
+                                  <div key={r.l} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid #0e1a10",fontSize:11}}>
+                                    <span style={{color:"#64748b"}}>{r.l}</span>
+                                    <span style={{color:r.c||"#e2e8f0",fontWeight:r.bold?700:500,fontFamily:"'DM Mono',monospace"}}>{r.v}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Recommendation banner */}
+                            {recommendation&&(
+                              <div style={{
+                                background: recommendation==="sell"?"#150d2a":"#071a0f",
+                                border:`1px solid ${recommendation==="sell"?"#7c3aed":"#16a34a"}`,
+                                borderRadius:8, padding:"12px 14px", fontSize:12, lineHeight:1.7,
+                                color: recommendation==="sell"?"#e9d5ff":"#bbf7d0"
+                              }}>
+                                {recommendation==="sell"?(
+                                  <>
+                                    <strong>📊 Recommendation: Sell</strong><br/>
+                                    Selling at age {saleAge} nets {fmt(netAfterCosts)} after costs. Deployed to <strong>{deployAcc.name}</strong> at {deployAcc.annualReturn}%,
+                                    it grows to <strong>{fmtK(sellFV)}</strong> by age {lifeExpectancy} —{" "}
+                                    <strong>{fmtK(sellFV - holdTotalFV)} more</strong> than holding.
+                                    {annualCashflow>0&&<> The net proceeds fund {yearsOfCashflow?.toFixed(1)} years of equivalent cashflow ({fmt(netAfterCosts)} ÷ {fmt(annualCashflow)}/yr).</>}
+                                  </>
+                                ):(
+                                  <>
+                                    <strong>📊 Recommendation: Hold</strong><br/>
+                                    Holding generates {fmt(netMo*12)}/yr in cashflow. Invested at {s.cashInvRate}%, the cashflow pot reaches <strong>{fmtK(holdCashPotFV)}</strong> plus
+                                    property equity of <strong>{fmtK(holdEquityFV)}</strong> = <strong>{fmtK(holdTotalFV)}</strong> by age {lifeExpectancy} —{" "}
+                                    <strong>{fmtK(holdTotalFV - sellFV)} more</strong> than selling and deploying.
+                                    {annualCashflow>0&&<> Selling would only fund {yearsOfCashflow?.toFixed(1)} years of equivalent cashflow.</>}
+                                  </>
+                                )}
+                              </div>
+                            )}
+                            {deployAcc&&retirementAge>=saleAge&&(
+                              <div style={{fontSize:11,color:"#475569"}}>
+                                → Deployed proceeds at retirement (age {retirementAge}): <strong style={{color:"#f59e0b"}}>{fmtK(deployedFVAtRetire)}</strong>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                       {!saleAge&&<div style={{fontSize:11,color:"#334155"}}>Enter a sale age above to model selling this property and deploying the proceeds.</div>}
                     </div>
 

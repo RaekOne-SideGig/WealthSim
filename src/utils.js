@@ -37,6 +37,19 @@ export function calcTax(g) {
 export const effRate  = (g) => g<=0?0:calcTax(g)/g*100;
 export const margRate = (g) => { const t=Math.max(0,g-STD_DED); let prev=0; for(const{up,rate}of BRACKETS){if(t<=up)return rate*100;prev=up;} return 37; };
 
+// ── FICA (Social Security + Medicare) ─────────────────────────────────────
+// SS: 6.2% up to $168,600 wage base (2024). Medicare: 1.45% all wages + 0.9% over $200k.
+export const SS_WAGE_BASE = 168600;
+export function calcFICA(grossAnnual) {
+  const ss       = Math.min(grossAnnual, SS_WAGE_BASE) * 0.062;
+  const medicare = grossAnnual * 0.0145 + Math.max(0, grossAnnual - 200000) * 0.009;
+  return ss + medicare;
+}
+// Combined federal + FICA monthly deduction
+export function calcTotalTaxMonthly(grossAnnual) {
+  return (calcTax(grossAnnual) + calcFICA(grossAnnual)) / 12;
+}
+
 // ── Field labels ───────────────────────────────────────────────────────────
 export const fieldLabel = (type, field, isPrimary) => {
   if(type==="property"){
@@ -100,7 +113,8 @@ export const DEF_ACCOUNTS = [
   {id:4,name:"Primary Residence", type:"property",   balance:480000,annualReturn:3.5,monthlyContribution:0,   color:COLORS[3],isPrimary:true },
   {id:5,name:"Rental Property",   type:"property",   balance:320000,annualReturn:3.0,monthlyContribution:1800,rentalInvestReturn:4.5,color:COLORS[4],isPrimary:false},
 ];
-export const DEF_PROFILE = { name:"My Portfolio", accounts:[...DEF_ACCOUNTS], settings:{...DEF_SETTINGS}, earnings:{...DEF_EARNINGS} };
+export const DEF_EXPENSES = { items:{} };
+export const DEF_PROFILE = { name:"My Portfolio", accounts:[...DEF_ACCOUNTS], settings:{...DEF_SETTINGS}, earnings:{...DEF_EARNINGS}, expenses:{...DEF_EXPENSES} };
 
 // ── JSONBin.io storage ────────────────────────────────────────────────────
 export const CREDS_KEY = "wealthsim_jsonbin_creds";

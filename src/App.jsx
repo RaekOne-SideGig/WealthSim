@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   fmt, fmtK, COLORS, FULL_SS_AGE, SS_COLA, ACCOUNT_TYPES, fieldLabel,
-  calcSSBenefit, calcTax, calcWaterfall, effRate, margRate,
+  calcSSBenefit, calcTax, calcFICA, calcTotalTaxMonthly, calcWaterfall, effRate, margRate,
   DEF_SETTINGS, DEF_EARNINGS, DEF_ACCOUNTS, DEF_PROFILE,
   loadCreds, saveCreds, clearCreds,
   jsonbinCreate, jsonbinRead, jsonbinWrite,
@@ -16,6 +16,8 @@ import PlanningTab        from "./components/PlanningTab.jsx";
 import RecommendationsTab from "./components/RecommendationsTab.jsx";
 import RentalTab          from "./components/RentalTab.jsx";
 import ScenariosTab       from "./components/ScenariosTab.jsx";
+import ExpensesTab        from "./components/ExpensesTab.jsx";
+import HomeTab            from "./components/HomeTab.jsx";
 
 export default function App() {
 
@@ -57,6 +59,7 @@ export default function App() {
   const accounts = profile.accounts || DEF_ACCOUNTS;
   const settings = profile.settings || DEF_SETTINGS;
   const earnings = profile.earnings  || DEF_EARNINGS;
+  const expenses = profile.expenses  || { items:{} };
   const {
     currentAge, retirementAge, inflation, lifeExpectancy,
     targetMonthlyIncome, ssClaimAge, ssFullMonthly, targetSustainAge,
@@ -92,6 +95,7 @@ export default function App() {
   const setAccounts    = (fn)    => updateProfile({accounts:typeof fn==="function"?fn(accounts):fn});
   const updateSettings = (k,v)   => updateProfile({settings:{...settings,[k]:v}});
   const updateEarnings = (k,v)   => updateProfile({earnings:{...earnings,[k]:v}});
+  const setExpenses    = (fn)    => updateProfile({expenses:typeof fn==="function"?fn(expenses):fn});
 
   const createProfile = () => {
     const name = newProfileName.trim();
@@ -162,12 +166,44 @@ export default function App() {
   // ── Account helpers ───────────────────────────────────────────────────
   const nextId    = useMemo(()=>accounts.length?Math.max(...accounts.map(a=>a.id))+1:1,[accounts]);
   const addAccount= () => { if(!newAcc.name)return; setAccounts(p=>[...p,{...newAcc,id:nextId,color:COLORS[p.length%COLORS.length]}]); setNewAcc({name:"",type:"savings",balance:0,annualReturn:4,monthlyContribution:0,isPrimary:false}); setShowAddForm(false); };
-  const updAcc    = (id,f,v)=>setAccounts(p=>p.map(a=>a.id===id?{...a,[f]:(f==="name"||f==="type"||f==="isPrimary")?v:parseFloat(v)||0}:a));
+  const updAcc    = (id,f,v)=>setAccounts(p=>p.map(a=>a.id===id?{...a,[f]:(f==="name"||f==="type"||f==="isPrimary"||f==="includeInEarnings")?v:parseFloat(v)||0}:a));
   const remAcc    = (id)=>setAccounts(p=>p.filter(a=>a.id!==id));
 
   // ── Derived earnings values ───────────────────────────────────────────
   const ssAdjMonthly       = useMemo(()=>calcSSBenefit(ssFullMonthly,ssClaimAge),[ssFullMonthly,ssClaimAge]);
-  const monthlySavings     = useMemo(()=>(earnings.grossIncome/12)*(earnings.savingsPct/100),[earnings]);
+  // Net cashflow from rental properties opted into earnings
+  // setSim writes to both simReturns (session) and updAcc (persisted).
+  // Prefer account fields as ground truth; fall back to simReturns for unsaved session changes.
+  // Use || not ?? so that 0 values in simReturns don't mask valid account data.
+  const rentalCashflowMonthly = useMemo(()=>{
+    return accounts
+      .filter(a=>a.type==="property"&&!a.isPrimary&&a.includeInEarnings)
+      .reduce((sum,a)=>{
+        // Match getPropSim defaults exactly — mortgageRate defaults to 6.5 not 0
+        const rent     = simReturns["rmt_"+a.id] ?? a.monthlyContribution ?? 0;
+        const mortAmt  = simReturns["rmg_"+a.id] ?? a.mortgageAmt  ?? 0;
+        const mortRate = simReturns["rmr_"+a.id] ?? a.mortgageRate  ?? 6.5;
+        const propTax  = simReturns["rpt_"+a.id] ?? a.propTax       ?? 0;
+        const insurance= simReturns["rin_"+a.id] ?? a.insurance     ?? 0;
+        const mr = mortRate/100/12;
+        const n  = 30*12;
+        const mp = mortAmt>0&&mr>0 ? mortAmt*mr*Math.pow(1+mr,n)/(Math.pow(1+mr,n)-1) : 0;
+        return sum + rent - propTax - insurance - mp;
+      }, 0);
+  },[accounts, simReturns]);
+
+  // monthlySavings = savingsPct% of residual (net after fed tax + FICA + partner income + rental cashflow - expenses)
+  const monthlySavings = useMemo(()=>{
+    const grossMonthly      = (earnings.grossIncome||0) / 12;
+    const totalTaxMonthly   = calcTotalTaxMonthly(earnings.grossIncome||0); // fed + FICA
+    const employerBenefits  = earnings.employerBenefits || 0;
+    const myNetMonthly      = grossMonthly - totalTaxMonthly - employerBenefits;
+    const partnerNet        = earnings.partnerIncome || 0;
+    const combinedNet       = myNetMonthly + partnerNet + rentalCashflowMonthly;
+    const totalExp          = expenses?.items ? Object.values(expenses.items).reduce((s,v)=>s+(parseFloat(v)||0),0) : 0;
+    const residual          = Math.max(0, combinedNet - totalExp);
+    return residual * ((earnings.savingsPct||0) / 100);
+  },[earnings, expenses, rentalCashflowMonthly]);
   const bonusAfterTax      = useMemo(()=>earnings.bonusAmount*(1-earnings.bonusTaxRate/100),[earnings]);
   const bonusSaved         = useMemo(()=>bonusAfterTax*(earnings.bonusSavePct/100),[bonusAfterTax,earnings]);
   const allocMap           = earnings.allocationMap  || {};
@@ -463,7 +499,7 @@ export default function App() {
   const inp = {background:"#1a1d27",border:"1px solid #2a2d3a",borderRadius:6,color:"#e2e8f0",padding:"7px 10px",fontSize:13,fontFamily:"inherit",width:"100%",outline:"none"};
   const sl  = {width:"100%",accentColor:"#3b82f6",cursor:"pointer"};
   const tb  = (t)=>({padding:"6px 14px",borderRadius:6,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",background:activeTab===t?"#3b82f6":"transparent",color:activeTab===t?"#fff":"#64748b",transition:"all .2s",whiteSpace:"nowrap"});
-  const TABS = ["portfolio","accounts","earnings","projections","retirement","planning","recommendations","rental","scenarios"];
+  const TABS = ["portfolio","accounts","earnings","expenses","rental","home","projections","retirement","planning","recommendations","scenarios"];
 
   // ── Loading screen ────────────────────────────────────────────────────
   if(loading) return (
@@ -535,6 +571,8 @@ export default function App() {
     earningsContribForYear, scenarioMult, scenarioAccIds, setScenarioAccIds,
     propertySales, setPropertySales,
     updAcc,
+    expenses, setExpenses,
+    rentalCashflowMonthly,
   };
 
   // ─────────────────────────────────────────────────────────────────────
@@ -667,7 +705,7 @@ export default function App() {
           COLORS={COLORS} ACCOUNT_TYPES={ACCOUNT_TYPES} TYPE_ICONS={{savings:"🏦",retirement:"🎯",investment:"📈",property:"🏠"}}
         />}
 
-        {activeTab==="earnings" && <EarningsTab {...common}/>}
+        {activeTab==="earnings" && <EarningsTab {...common} expenses={expenses}/>}
 
         {activeTab==="projections" && <ProjectionsTab {...common}/>}
 
@@ -683,6 +721,20 @@ export default function App() {
 
         {activeTab==="scenarios" && <ScenariosTab {...common}
           scenarioMult={scenarioMult} setScenarioMult={setScenarioMult}
+        />}
+
+        {activeTab==="expenses" && <ExpensesTab
+          expenses={expenses} setExpenses={setExpenses}
+          earnings={earnings} currentAge={currentAge}
+          retirementAge={retirementAge} inflation={inflation}
+          inp={inp} monthlySavings={monthlySavings}
+          rentalCashflowMonthly={rentalCashflowMonthly}
+        />}
+
+        {activeTab==="home" && <HomeTab
+          accounts={accounts} currentAge={currentAge}
+          inflation={inflation} inp={inp} sl={sl}
+          earnings={earnings}
         />}
 
         <div style={{marginTop:16,textAlign:"center",color:"#1a1d27",fontSize:11}}>
